@@ -164,8 +164,8 @@
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 250); }
 
   function reset(preset) {
-    const notes = S ? S.notes : true;
-    S = freshState(); S.notes = notes; S.welcomed = true;
+    try { localStorage.removeItem(KEY); } catch (e) { /* storage blocked */ }
+    S = freshState(); S.welcomed = preset !== 'fresh';
     if (preset === 'pilot') {
       saveStateChange('AZ', 'async', AZ_NOTE, 'Compliance team');
       setExam('wl-fu-sema', true, 'Compliance team');
@@ -802,7 +802,7 @@
   }
   function resetModal() {
     return `<div class="modal-wrap"><div class="modal" style="width:min(540px,100%)"><h2>Reset the demo</h2><p class="muted" style="margin:4px 0 0">Clears every change, invite and answer in this browser.</p>
-      <div class="reset-opts"><button data-act="reset" data-preset="before"><b>Before the pilot</b><span>Arizona not reviewed yet, and every exam and clinic switched off. The walkthrough starts here.</span></button><button data-act="reset" data-preset="pilot"><b>Pilot running</b><span>Arizona allowed, the two weight-loss follow-ups and Mock Wellness Clinic switched on.</span></button></div>
+      <div class="reset-opts"><button data-act="reset" data-preset="fresh"><b>Start over</b><span>Everything back to the first visit: the welcome screen, notes on, and every What if question at its default.</span></button><button data-act="reset" data-preset="before"><b>Before the pilot</b><span>Arizona not reviewed yet, and every exam and clinic switched off. The walkthrough opens on the right at step 1.</span></button><button data-act="reset" data-preset="pilot"><b>Pilot running</b><span>Arizona allowed, the two weight-loss follow-ups and Mock Wellness Clinic switched on.</span></button></div>
       <div class="foot"><button class="btn btn-ghost" data-act="modal-close">Cancel</button></div></div></div>`;
   }
   function kvt(rows) { return `<table class="kvt">${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</table>`; }
@@ -1069,14 +1069,19 @@
     'wt-back'() { if (S.wt.step > 0) goStep(S.wt.step - 1); },
     'wt-goto'(d) { goStep(Number(d.i)); },
     'wt-do'() { const st = STEPS[S.wt.step]; if (st.doIt && !(st.done && st.done())) st.doIt(); },
-    'wt-close'() { S.wt.on = false; },
+    'wt-close'() { S.wt.on = false; toast('Walkthrough hidden. The Walkthrough button in the bottom bar brings it back.'); },
     'wt-restart'() { startWalkthrough(0); },
     'wt-jump'(d) { const i = STEPS.findIndex((s) => s.id === d.step); if (i < 0) return false; S.drawer = null; goStep(i); },
     ref(d) { S.drawer = { kind: 'ctx' }; S.ctxTab = d.ref[0] === 'R' ? 'requirements' : 'decisions'; },
     'start-wt'() { startWalkthrough(0); },
     'start-explore'() { reset('pilot'); S.wt.on = false; go('superadmin'); S.view.sa = 'hub'; S.view.hubTab = 'states'; toast('The pilot is switched on: Arizona, the two follow-up exams and Mock Wellness Clinic.'); },
     'reset-open'() { S.modal = { kind: 'reset' }; },
-    reset(d) { const wasOn = S.wt.on; reset(d.preset); S.wt.on = false; if (wasOn && d.preset === 'before') { S.wt.on = true; goStep(0); } toast(d.preset === 'pilot' ? 'Reset with the pilot running.' : 'Reset to before the pilot.'); },
+    reset(d) {
+      if (d.preset === 'fresh') { reset('fresh'); toast('Everything is back to the first visit.'); return; }
+      if (d.preset === 'before') { startWalkthrough(0); toast('Reset to before the pilot. The walkthrough is open on the right.'); return; }
+      reset(d.preset); S.wt.on = false;
+      toast('Reset with the pilot running. The Walkthrough button in the bottom bar opens the guide.');
+    },
     notes() { S.notes = !S.notes; },
   };
 

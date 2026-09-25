@@ -167,7 +167,7 @@
       fv.forEach((c) => { Object.assign(states[c], { firstVideo: true, note: n, at }); });
       log.push({ at, who: 'Compliance team', what: `First visit must be video, switched on in ${listJoin(fv.map(stateName))}`, from: 'Off', to: 'On', note: n });
     }
-    const exams = {}; D.EXAMS.forEach((e) => { exams[e.id] = { on: false, except: {} }; });
+    const exams = {}; D.EXAMS.forEach((e) => { exams[e.id] = { on: false, except: {}, hold: null }; });
     Object.entries(D.EXAM_START || {}).forEach(([id, map]) => {
       if (!exams[id]) return;
       Object.entries(map).forEach(([code, x]) => {
@@ -181,7 +181,7 @@
     D.CLINICS.forEach((c) => { rollout[c.id] = false; asyncToday[c.id] = !!c.asyncToday; cset[c.id] = { defaultType: c.defaultType || 'async', choice: c.choice !== false }; });
     return {
       v: 2, role: 'superadmin',
-      view: { sa: 'settings', area: 'async', hubTab: 'states', mapMode: 'map', filter: 'all', stateEdit: null, examEdit: null, clinic: 'results', provider: 'queue', providerAs: 'ft', reviewId: null, patientId: null, pscreen: 'sms' },
+      view: { sa: 'settings', area: 'async', hubTab: 'states', mapMode: 'map', filter: 'all', stateEdit: null, examEdit: null, examQ: '', examType: 'all', examList: 'all', clinic: 'results', provider: 'queue', providerAs: 'ft', reviewId: null, patientId: null, pscreen: 'sms' },
       states, exams, rollout, asyncToday, cset, whatif: Object.assign({}, WHATIF_DEFAULTS), access: { holdHours: 4 },
       log, records: seedRecords(t0), nextId: 16512205,
       invite: inviteFromPatient(D.PATIENTS[0]), tester: testerDefaults(),
@@ -245,7 +245,7 @@
     return { on: !!S.rollout[id], label: S.rollout[id] ? 'In the rollout' : 'Not yet', note: '' };
   }
   const inRollout = (id) => rolloutOf(id).on;
-  const selectable = (e) => !(e.copy && S.whatif.q5 === 'retire');
+  const selectable = (e) => !(e.copy && S.whatif.q5 === 'retire') && (!e.custom || e.owner === MY);
 
   /* The compliance layer: every check must pass before a clinic or patient can pick async. */
   function rules(o) {
@@ -319,6 +319,10 @@
   const wtChoiceRec = () => (S.wtChoiceId ? rec(S.wtChoiceId) : null);
   const curPtRec = () => rec(S.view.patientId) || S.records.find((r) => !r.seed) || null;
   function addLog(who, what, from, to, note) { S.log.unshift({ at: now(), who, what, from, to, note: note || '' }); }
+  /* Time to 1099: the Qualiphy standard (Async Access Settings) unless the exam sets its own. */
+  const examHold = (examId) => { const x = S.exams[examId]; return x && x.hold != null ? x.hold : null; };
+  const holdFor = (examId) => { const h = examHold(examId); return h == null ? S.access.holdHours : h; };
+  const hoursLabel = (h) => (h === 0 ? 'No wait' : `${h} hour${h === 1 ? '' : 's'}`);
   function flagAffected() {
     const ids = S.records.filter((r) => r.type === 'async' && r.converted && OPEN.includes(r.status) && !recRules(r).allowed).map((r) => r.id);
     S.affected = ids.length ? { ids } : null;
@@ -425,7 +429,7 @@
       r.events.push({ at: t, text: 'Patient chose async review at submit. The choice is recorded on the exam.' });
     }
     r.status = 'submitted'; r.submittedAt = t; keepAnswers(r);
-    if (r.converted && S.whatif.q2 === 'yes') r.heldUntil = t + S.access.holdHours * 36e5;
+    if (r.converted && S.whatif.q2 === 'yes') r.heldUntil = t + holdFor(r.examId) * 36e5;
     r.events.push({ at: t, text: 'Patient submitted the answers for review.' });
     S.view.pscreen = 'done';
   }
@@ -658,17 +662,32 @@
   }
   function hubExams() {
     const ed = S.view.examEdit; const widen = S.whatif.qb === 'widen';
-    const rows = D.EXAMS.map((e) => {
+    const q = (S.view.examQ || '').trim().toLowerCase(); const ft = S.view.examType || 'all'; const fl = S.view.examList || 'all';
+    const list = D.EXAMS.filter((e) => (!q || e.name.toLowerCase().includes(q) || e.category.toLowerCase().includes(q))
+      && (ft === 'all' || e.type === ft) && (fl === 'all' || (fl === 'custom' ? !!e.custom : !e.custom)));
+    const ownerName = (id) => (D.CLINICS.find((c) => c.id === id) || {}).name || 'a clinic';
+    const std = S.access.holdHours;
+    const rows = list.map((e) => {
       const er = examRule(e.id); const on = S.exams[e.id].on && er.eligible;
       const ready = e.urgent || e.copy ? '<span class="muted">n/a</span>' : e.ready ? `<span class="ready yes">${I('check')} Ready</span>` : `<span class="ready no">${I('alert')} Not yet</span>`;
       const rule = er.lock ? `<span class="lock-note">${I('lock')}<span>${esc(er.lock)}</span></span>` : `<span class="muted small">${on ? 'Follows the state defaults, with any exceptions.' : "Can't run async. Video everywhere."}</span>`;
       const exs = Object.entries(S.exams[e.id].except);
       const chips = exs.map(([code, x]) => `<span class="ex-chip ${x.mode}${x.mode === 'async' && !widen ? ' inactive' : ''}" title="${esc(x.note || '')}">${esc(stateName(code))}: ${x.mode === 'video' ? 'video' : 'async'}</span>`).join('');
       const exc = er.eligible ? `${chips}<button class="link small" data-act="ex-open" data-id="${e.id}">${exs.length ? 'Edit' : 'Add'}</button>` : '<span class="muted small">n/a</span>';
-      return `<tr data-row="${e.id}" class="${er.eligible ? '' : 'locked'}${ed && ed.id === e.id ? ' sel' : ''}"><td><b>${esc(e.name)}</b><span class="sub">${esc(e.category)}</span></td><td class="nowrap">${ready}</td><td>${rule}</td><td>${exc}</td><td class="r"><button class="sw ${on ? 'on' : ''}" data-act="exam-toggle" data-id="${e.id}" ${er.eligible ? '' : 'disabled'} aria-label="Async for ${esc(e.name)}"></button></td></tr>`;
+      const own = examHold(e.id);
+      const hold = !er.eligible ? '<span class="muted small">n/a</span>'
+        : `${own == null ? `<span class="muted small">Standard (${esc(hoursLabel(std))})</span>` : `<span class="hold-own">${esc(hoursLabel(own))}</span><span class="sub">This exam's own</span>`}<button class="link small" data-act="ex-open" data-id="${e.id}">Change</button>`;
+      const kind = e.custom ? `Custom, ${esc(ownerName(e.owner))}` : 'Qualiphy exam';
+      return `<tr data-row="${e.id}" class="${er.eligible ? '' : 'locked'}${ed && ed.id === e.id ? ' sel' : ''}"><td><b>${esc(e.name)}</b><span class="sub">${esc(e.category)} · ${esc(D.EXAM_TYPES[e.type] || e.type)} · ${kind}</span></td><td class="nowrap">${ready}</td><td>${rule}</td><td>${exc}</td><td class="hold-cell">${hold}</td><td class="r"><button class="sw ${on ? 'on' : ''}" data-act="exam-toggle" data-id="${e.id}" ${er.eligible ? '' : 'disabled'} aria-label="Async for ${esc(e.name)}"></button></td></tr>`;
     }).join('');
-    return `<div class="card" id="exam-card"><div class="card-head"><div><h3>Exams</h3><p class="muted small">An exam that can run async follows the state defaults. Its exceptions by state supersede them. Every switch starts off.</p></div></div>
-    <table class="tbl"><thead><tr><th>Exam</th><th>Async-ready</th><th>Rule</th><th>Exceptions by state</th><th class="r">Can run async</th></tr></thead><tbody>${rows}</tbody></table></div>
+    const filters = `<div class="exam-filters" id="exam-filters">
+      <label class="field grow"><span>Search</span><input id="exam-search" data-bind="view.examQ" value="${esc(S.view.examQ || '')}" placeholder="Exam name or category" autocomplete="off"></label>
+      <label class="field"><span>Exam type</span><select id="exam-type" data-bind="view.examType" data-rerender>${opt('all', 'All types', ft)}${Object.entries(D.EXAM_TYPES).map(([k, v]) => opt(k, v, ft)).join('')}</select></label>
+      <label class="field"><span>List</span><select id="exam-list" data-bind="view.examList" data-rerender>${opt('all', 'Qualiphy and custom', fl)}${opt('admin', 'Qualiphy exams', fl)}${opt('custom', 'Custom exams', fl)}</select></label>
+      <span class="muted small ef-count" id="exam-count">${list.length} of ${D.EXAMS.length} exams</span></div>`;
+    return `<div class="card" id="exam-card"><div class="card-head"><div><h3>Exams</h3><p class="muted small">Qualiphy and custom exams in one list, searchable by name and exam type. An exam that can run async follows the state defaults, and its exceptions by state supersede them. Every switch starts off. Time to 1099 is the Qualiphy standard unless the exam sets its own.</p></div></div>
+    ${filters}
+    ${rows ? `<table class="tbl"><thead><tr><th>Exam</th><th>Async-ready</th><th>Rule</th><th>Exceptions by state</th><th>Time to 1099</th><th class="r">Can run async</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="muted small" id="exam-none" style="margin:14px 0 0">No exams match.</p>'}</div>
     ${ed ? examEditor(ed) : ''}
     ${dnote(`Open ${QW('q6')} (${qWho('q6')})`, '"Async-ready" stands in for whatever an exam must have before it can run async, for example async questions.')}
     ${dnote(`Open ${QW('qb')} (${qWho('qb')})`, 'An exception can keep an exam on video in a state that allows async. Whether one can also allow async where the state says video is open. Until then, "Async here" is off.')}`;
@@ -682,7 +701,12 @@
     const list = exs.length
       ? `<ul class="ex-list">${exs.map(([code, x]) => `<li><span><b>${esc(stateName(code))}</b>: ${exLabel(x.mode)}${x.mode === 'async' && !widen ? ` <span class="chip chip-def">Not applied, ${QW('qb')}'s default</span>` : ''}<span class="sub">${esc(x.note || '')}</span></span><button class="btn btn-ghost sm" data-act="ex-remove" data-id="${ed.id}" data-code="${code}">Remove</button></li>`).join('')}</ul>`
       : '<p class="muted small" style="margin:10px 0 0">No exceptions. This exam follows the state defaults everywhere.</p>';
-    return `<div class="card" id="exam-editor"><div class="row-between"><div><h3>Exceptions: ${esc(e.name)}</h3><p class="muted small" style="margin:2px 0 0">Exam rules supersede the state defaults for this exam. Every change is logged.</p></div><button class="btn btn-ghost sm" data-act="ex-close">Close</button></div>
+    const own = examHold(ed.id); const holdSel = own == null ? 'std' : String(own);
+    const holdBlock = `<div class="hold-row" id="exam-hold"><div><b>Time to 1099</b><small>How long a converted ${esc(e.short)} waits for full-time providers before 1099 providers see it. The Qualiphy standard applies unless this exam sets its own.</small></div>
+      <select id="exam-hold-pick" data-bind="view.examEdit.holdPick" data-after="examHoldPick" data-rerender aria-label="Time to 1099 for ${esc(e.name)}">${opt('std', `Qualiphy standard (${hoursLabel(S.access.holdHours)})`, holdSel)}${[0, 1, 2, 4, 8, 12, 24, 48].map((h) => opt(String(h), `${hoursLabel(h)}, this exam only`, holdSel)).join('')}</select></div>`;
+    return `<div class="card" id="exam-editor"><div class="row-between"><div><h3>Rules: ${esc(e.name)}</h3><p class="muted small" style="margin:2px 0 0">Exam rules supersede the state defaults and the Qualiphy standard for this exam. Every change is logged.</p></div><button class="btn btn-ghost sm" data-act="ex-close">Close</button></div>
+      ${holdBlock}
+      <h4 class="ex-h">Exceptions by state</h4>
       ${list}
       <div class="ex-add">
         <label class="field"><span>State</span><select id="ex-state" data-bind="view.examEdit.code" data-rerender>${opt('', 'Pick a state', ed.code)}${stateOptions(ed.code)}</select></label>
@@ -748,12 +772,17 @@
   }
   function viewAccess() {
     const q2 = S.whatif.q2 === 'yes';
+    const own = D.EXAMS.filter((e) => examHold(e.id) != null);
+    const ownList = own.length
+      ? `<ul class="hold-list" id="hold-overrides">${own.map((e) => `<li><span>${esc(e.name)}</span><b>${esc(hoursLabel(examHold(e.id)))}</b></li>`).join('')}</ul>`
+      : '<p class="muted small" id="hold-overrides" style="margin:8px 0 0">No exam sets its own time yet. Every converted exam uses the standard.</p>';
     return `<div class="card" style="max-width:760px" id="access-card">
-      <div class="row-between"><div><h3>Converted exams: full-time providers first</h3><p class="muted small" style="margin:2px 0 0">1099 providers see a converted exam only after this hold. Other async exams work as today.</p></div>
+      <div class="row-between"><div><h3>Time to 1099: the Qualiphy standard</h3><p class="muted small" style="margin:2px 0 0">How long a converted exam waits for full-time providers before 1099 providers see it. It applies to every exam unless the exam sets its own in Compliance Hub › Exams. Other async exams work as today.</p></div>
       <div class="row"><input type="number" min="0" max="48" class="num" data-bind="access.holdHours" data-num data-after="clampHold" data-rerender value="${esc(S.access.holdHours)}" ${q2 ? '' : 'disabled'}><span class="muted">hours</span></div></div>
       ${q2 ? '' : `<div class="banner warn">${I('alert')}<div>${cap(QW('q2'))} is set to <b>No</b> in What if, so converted exams show to every provider at once.</div></div>`}
+      <h4 class="ex-h">Exams with their own time</h4>${ownList}
     </div>
-    ${dnote('Existing screen, moving in', `Async Access Settings already controls when 1099 providers can see async exams, and moves into the Compliance Hub. Its real fields aren't copied here. This shows the one setting the pilot relies on (${QW('q2')}).`, 'style="max-width:760px"')}`;
+    ${dnote('Existing screen, moving in', `Async Access Settings already controls when 1099 providers can see async exams, and moves into the Compliance Hub. Its real fields aren't copied here. This shows the one setting the pilot relies on (${QW('q2')}): the standard, which an exam can override.`, 'style="max-width:760px"')}`;
   }
   function viewRoles() {
     const rows = [
@@ -1010,7 +1039,7 @@
     return `<div class="modal-wrap"><div class="welcome" role="dialog" aria-label="Welcome">
       <div class="kick">Qualiphy · Product demo · PRD ${esc(D.META.prd)} · ${esc(D.META.prdDate)}</div>
       <h1>Async conversion</h1>
-      <p class="lede">One exam, either way. Compliance sets the rules, the clinic picks the visit type on each invite, and the patient can choose the other way. Wherever the rules allow it, async comes first.</p>
+      <p class="lede">One exam, either way. Compliance sets the rules, the clinic picks the visit type on each invite, and the patient can choose the other way. Nothing converts on its own: the clinic picks async at send, or the patient picks it at submit.</p>
       <div class="w-cards">
         <div class="w-card"><div class="t">Why</div><p>${esc(F.why || '')}</p></div>
         <div class="w-card"><div class="t">What you'll see</div><ul><li>Async admin: the Compliance Hub</li><li>Clinic: settings, and the visit type on each invite</li><li>Patient: async first, with a choice both ways</li><li>Provider: the async queue, full-time first</li></ul></div>
@@ -1043,7 +1072,7 @@
     return `${kvt(D.PRD.summary)}<h3>Who sees what</h3><table class="tbl"><thead><tr><th>Who</th><th>Where</th><th>What they see</th><th></th></tr></thead><tbody>${D.PRD.whoSees.map(([w, p, s, step]) => `<tr><td><b>${esc(w)}</b></td><td>${esc(p)}</td><td>${esc(s)}</td><td class="r"><button class="btn btn-ghost sm" data-act="wt-jump" data-step="${step}">See it</button></td></tr>`).join('')}</tbody></table>`;
   }
   function ctxHow() {
-    return `<h3>How an invite is decided</h3><div class="flow"><div class="fs"><b>1. State</b>Async allowed, plus the first-visit rule for new patients</div><div class="fs"><b>2. Exam</b>Can run async, with exceptions by state</div><div class="fs"><b>3. Rollout</b>The clinic is in the rollout</div><div class="fs"><b>4. Clinic</b>Picks async or video, and whether the patient can choose</div><div class="fs"><b>5. Patient</b>Can choose the other way, when allowed</div><div class="fs out"><b>Async first</b>Wherever the rules allow it, async is the default and the primary button.</div></div>${kvt(D.PRD.how)}`;
+    return `<h3>How an invite is decided</h3><div class="flow"><div class="fs"><b>1. State</b>Async allowed, plus the first-visit rule for new patients</div><div class="fs"><b>2. Exam</b>Can run async, with exceptions by state</div><div class="fs"><b>3. Rollout</b>The clinic is in the rollout</div><div class="fs"><b>4. Clinic</b>Picks async or video, and whether the patient can choose</div><div class="fs"><b>5. Patient</b>Can choose the other way, when allowed</div><div class="fs out"><b>By choice</b>Nothing converts on its own. The clinic picks async at send, or the patient at submit. Where it\'s allowed, async is offered first.</div></div>${kvt(D.PRD.how)}`;
   }
   function ctxDecisions() {
     const pc = previewCount();
@@ -1136,7 +1165,7 @@
       body: () => `<p>When the rules allow it, an exam runs as an <b>async review</b> instead of a video visit. It's the same exam, with no separate async copy.</p>
         <ul><li><b>Why:</b> ${esc(F.why || '')}</li>
         <li><b>Who decides, in order:</b> Compliance's rules, then the clinic, then the patient. A clinic can never turn on async where the rules say video.</li>
-        <li><b>Async first:</b> where the rules allow it, async review is the default and the primary button. Video stays an option.</li>
+        <li><b>By choice, never automatic:</b> the clinic picks the visit type at send, and the patient can pick at submit. Where the rules allow it, async review is offered first. Video stays an option.</li>
         <li><b>First release:</b> clinic-portal invites, piloted with 3 clinics. API modes are designed now and built later.</li></ul>
         <p class="wt-hint">You'll follow one invite from the rules to the provider's review, then watch a patient pick async on a video invite. Use Next or the arrow keys. The bottom bar switches views at any time.</p>`,
       run() { go('superadmin'); S.view.sa = 'settings'; } },
@@ -1175,7 +1204,7 @@
       run() { hub('log'); } },
     { id: 'clinic-settings', title: 'The clinic sets its defaults', where: 'Clinic portal › Settings › Async review', refs: ['R4', 'qa'], target: '#clinic-async',
       body: () => `<p>Inside the rules, the clinic is in control. Two new settings:</p>
-        <ul><li><b>Default visit type</b> for new invites. It starts as <b>Async review</b>: it costs less and frees provider time.</li>
+        <ul><li><b>Default visit type</b> for new invites. It starts as <b>Async review</b>, preselected on each invite. Staff still choose before sending.</li>
         <li><b>Let patients choose</b> the other visit type. It starts on. A clinic that wants its pick to stick turns it off.</li></ul>
         <p>If a clinic turns patient choice off, does the patient keep video on an async review? That's ${QW('qa')}. The demo keeps video one tap away.</p>`,
       run() { go('clinic'); S.view.clinic = 'settings'; } },
@@ -1214,7 +1243,7 @@
       run() { go('provider'); S.view.providerAs = 'ft'; S.view.provider = 'queue'; } },
     { id: 'provider-1099', title: '1099 providers see it later', where: 'Provider portal › Asynchronous Exam, as a 1099 provider', refs: ['q2'], target: () => (document.getElementById('held-note') ? '#held-note' : '#queue-card'),
       body: () => (S.whatif.q2 === 'yes'
-        ? `<p>Signed in as a 1099 provider, the converted exam isn't in the list yet. <b>Async Access Settings</b> holds it for full-time providers first (${esc(S.access.holdHours)} hours in this demo).</p><p>That setting already exists, and moves into the Compliance Hub, so this uses a setting we have rather than a new one.</p>`
+        ? `<p>Signed in as a 1099 provider, the converted exam isn't in the list yet. It waits for full-time providers first: its <b>time to 1099</b> is ${esc(hoursLabel(wtRec() ? holdFor(wtRec().examId) : S.access.holdHours).toLowerCase())} in this demo${wtRec() && examHold(wtRec().examId) != null ? ", the exam's own time" : ', the Qualiphy standard'}.</p><p>The standard lives in Async Access Settings, which already exists and moves into the Compliance Hub. An exam can set its own time, which overrides the standard.</p>`
         : `<p>${cap(QW('q2'))} is set to <b>No</b> in What if, so the converted exam shows to 1099 providers at once.</p>`),
       run() { go('provider'); S.view.providerAs = '1099'; S.view.provider = 'queue'; } },
     { id: 'provider-review', title: "Why it's async, on the exam", where: 'Provider portal › Asynchronous Exam › exam review', refs: ['R8'], target: '#audit-card',
@@ -1245,7 +1274,7 @@
       body: () => `<p>${F.review ? `${esc(F.review)} ` : ''}The demo builds to each default. Flip any question to preview its alternative:</p><ul>${D.PRD.owners.map(([w]) => { const qs = D.PRD.decisions.filter((q) => q.who === w); return qs.length ? `<li><b>${esc(w)}:</b> ${esc(qs.map((q) => q.short).join('; '))}.</li>` : ''; }).join('')}</ul>`,
       run() { S.drawer = { kind: 'ctx' }; S.ctxTab = 'decisions'; } },
     { id: 'end', title: "That's the flow", where: 'Async conversion · explore freely', refs: [], target: null,
-      body: `<p>Rules first, then the clinic, then the patient, with async first wherever it's allowed.</p><ul><li><b>Explore:</b> the bottom bar switches views. Try other states, exams, patients and clinic settings.</li><li><b>What if:</b> preview any open question's alternative.</li><li><b>Reset:</b> start again before the pilot, or with it running.</li></ul>`,
+      body: `<p>Rules first, then the clinic's pick at send, then the patient's pick at submit. Nothing converts on its own.</p><ul><li><b>Explore:</b> the bottom bar switches views. Try other states, exams, patients and clinic settings.</li><li><b>What if:</b> preview any open question's alternative.</li><li><b>Reset:</b> start again before the pilot, or with it running.</li></ul>`,
       run() { hub('states'); S.view.stateEdit = null; } },
   ];
 
@@ -1283,6 +1312,16 @@
   const AFTER = {
     ptPick() { S.view.pscreen = 'sms'; S.intake = emptyIntake(); },
     clampHold() { const v = Number(S.access.holdHours); S.access.holdHours = Number.isFinite(v) ? Math.max(0, Math.min(48, Math.round(v))) : 4; },
+    examHoldPick(v) {
+      const ed = S.view.examEdit; if (!ed) return;
+      const x = S.exams[ed.id]; const before = x.hold;
+      const next = v === 'std' ? null : Math.max(0, Math.min(48, Math.round(Number(v))));
+      if (before === next) return;
+      x.hold = next;
+      const label = (h) => (h == null ? `Qualiphy standard (${hoursLabel(S.access.holdHours)})` : `${hoursLabel(h)} (this exam)`);
+      addLog(YOU, `${EXAM_BY[ed.id].name}: time to 1099`, label(before), label(next), next == null ? 'Back to the Qualiphy standard' : 'Exam-level override');
+      toast(`${EXAM_BY[ed.id].name}: time to 1099 is now ${next == null ? 'the Qualiphy standard' : hoursLabel(next).toLowerCase()}. Logged.`);
+    },
   };
   const ACT = {
     noop() { toast('Not part of this demo.'); return false; },
@@ -1358,7 +1397,12 @@
     'pv-queue'() { go('provider'); S.view.provider = 'queue'; },
     'pv-approve'(d) { finish(Number(d.id), 'completed'); toast('Approved. The exam is completed.'); },
     'pv-defer'(d) { finish(Number(d.id), 'deferred'); toast("Deferred, using today's process."); },
-    'fast-forward'() { S.clockOffset = (S.clockOffset || 0) + S.access.holdHours * 36e5 + 60000; toast(`The demo clock moved ahead ${S.access.holdHours} hours.`); },
+    'fast-forward'() {
+      const waits = S.records.filter((r) => r.converted && r.heldUntil && now() < r.heldUntil).map((r) => r.heldUntil - now());
+      const ms = waits.length ? Math.max(...waits) : S.access.holdHours * 36e5;
+      S.clockOffset = (S.clockOffset || 0) + ms + 60000;
+      toast(`The demo clock moved ahead ${Math.ceil(ms / 36e5)} hour${Math.ceil(ms / 36e5) === 1 ? '' : 's'}.`);
+    },
     'wt-toggle'() { if (S.wt.on) { S.wt.on = false; } else { goStep(S.wt.step || 0); } },
     'wt-next'() { const st = STEPS[S.wt.step]; if (st.stayAfterDo && st.doIt && !(st.done && st.done())) { st.doIt(); return; } if (S.wt.step < STEPS.length - 1) goStep(S.wt.step + 1); },
     'wt-back'() { if (S.wt.step > 0) goStep(S.wt.step - 1); },
@@ -1427,6 +1471,12 @@
     setPath(S, path, el.dataset.num !== undefined ? Number(el.value) : el.value);
     if (path === 'view.stateEdit.note') { const b = document.getElementById('btn-save-state'); if (b) b.disabled = !canSaveState(); }
     if (path === 'view.examEdit.note') { const b = document.getElementById('btn-add-ex'); if (b) b.disabled = !canAddException(); }
+    if (path === 'view.examQ') {
+      const pos = el.selectionStart; render();
+      const again = document.getElementById('exam-search');
+      if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (err) { /* not a text input */ } }
+      return;
+    }
     saveSoon();
   });
   document.addEventListener('change', (e) => {
@@ -1451,7 +1501,14 @@
   window.addEventListener('beforeunload', save);
 
   /* ------------------------------------------------------------------ init */
-  S = load() || freshState();
+  /* Saved demos from before Sep 24 lack the custom exams, the per-exam time to 1099 and the exam filters. */
+  function migrate(s) {
+    if (!s) return null;
+    D.EXAMS.forEach((e) => { if (!s.exams[e.id]) s.exams[e.id] = { on: false, except: {}, hold: null }; else if (s.exams[e.id].hold === undefined) s.exams[e.id].hold = null; });
+    s.view.examQ = s.view.examQ || ''; s.view.examType = s.view.examType || 'all'; s.view.examList = s.view.examList || 'all';
+    return s;
+  }
+  S = migrate(load()) || freshState();
   if (params.get('preset') === 'pilot') { reset('pilot'); }
   if (params.has('step')) { S.welcomed = true; startWalkthrough(Number(params.get('step')) || 0); }
   else if (params.has('role')) { S.welcomed = true; S.role = params.get('role'); }
@@ -1459,4 +1516,30 @@
 
   /* Test hook for the smoke script: read-only snapshot of the store. */
   window.__demo = { get state() { return JSON.parse(JSON.stringify(S)); }, steps: STEPS.map((s) => s.id) };
+
+  /* Review comments (comments.js): which screen a comment belongs to, and how to get back to it. */
+  const HUB_TAB_LABEL = { states: 'States', exams: 'Exams', rollout: 'Rollout', test: 'Test an invite', log: 'Change log', pilot: 'Pilot' };
+  window.__commentContext = (el) => {
+    const v = S.view; let snap; let label;
+    if (el && el.closest && el.closest('#wt')) { snap = { wt: S.wt.step }; label = `Walkthrough, step ${S.wt.step + 1}`; }
+    else if (el && el.closest && el.closest('.drawer') && S.drawer) { snap = { drawer: Object.assign({}, S.drawer), tab: S.ctxTab }; label = S.drawer.kind === 'record' ? `Exam #${S.drawer.id} details` : `PRD context › ${S.ctxTab}`; }
+    else if (S.role === 'superadmin') {
+      snap = { role: 'superadmin', sa: v.sa, area: v.area, hubTab: v.hubTab };
+      label = v.sa !== 'hub' ? 'Admin › Settings' : v.area === 'access' ? 'Compliance Hub › Async Access Settings' : v.area === 'roles' ? 'Compliance Hub › Roles and permissions' : `Compliance Hub › ${HUB_TAB_LABEL[v.hubTab] || 'States'}`;
+    } else if (S.role === 'clinic') {
+      snap = { role: 'clinic', clinic: v.clinic }; label = `Clinic › ${{ results: 'Results', settings: 'Settings', invite: 'Invite Patient' }[v.clinic] || v.clinic}`;
+    } else if (S.role === 'provider') {
+      snap = { role: 'provider', provider: v.provider, providerAs: v.providerAs }; label = `Provider (${v.providerAs === '1099' ? '1099' : 'full-time'}) › ${v.provider === 'review' ? 'Exam review' : 'Asynchronous Exam queue'}`;
+    } else { snap = { role: 'patient', pscreen: v.pscreen }; label = `Patient › ${v.pscreen}`; }
+    return { key: JSON.stringify(snap), label, snap };
+  };
+  window.__commentGoto = (snap) => {
+    if (!snap) return;
+    if (snap.wt != null) { S.welcomed = true; startWalkthrough(snap.wt); render(); return; }
+    S.modal = null;
+    if (snap.drawer) { S.drawer = Object.assign({}, snap.drawer); if (snap.tab) S.ctxTab = snap.tab; render(); return; }
+    S.drawer = null; S.role = snap.role;
+    ['sa', 'area', 'hubTab', 'clinic', 'provider', 'providerAs', 'pscreen'].forEach((k) => { if (snap[k] !== undefined) S.view[k] = snap[k]; });
+    render();
+  };
 })();

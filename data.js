@@ -75,7 +75,13 @@
     { id: 'botox-gfe', name: 'Botox & Filler Good Faith Exam', short: 'Botox and filler exam', type: 'gfe', visit: 'first', category: 'Aesthetics', ready: true },
     { id: 'urgent', name: 'Urgent Care Visit', short: 'urgent care visit', type: 'urgent', visit: 'first', category: 'Urgent care', urgent: true, ready: false },
     { id: 'trt', name: 'Testosterone Therapy Follow-Up', short: 'testosterone follow-up', type: 'pharmacy', visit: 'follow-up', category: 'Hormones', controlled: true, ready: true },
+    /* Custom exams: built by one clinic (owner) and only sendable by it. The SuperAdmin exam list covers both kinds. */
+    { id: 'c-wl-checkin', name: 'Weight Loss Monthly Check-In', short: 'weight-loss check-in', type: 'rx', visit: 'follow-up', category: 'Weight loss', custom: true, owner: 'mock', ready: true },
+    { id: 'c-iv-menu', name: 'IV Hydration Menu Screening', short: 'IV screening', type: 'gfe', visit: 'first', category: 'IV therapy', custom: true, owner: 'ex-iv', ready: false },
   ];
+
+  /* Exam types, as the SuperAdmin exam list filters them. */
+  D.EXAM_TYPES = { gfe: 'Good Faith Exam', rx: 'QualiphyRx', urgent: 'Urgent Care', pharmacy: 'Choose Your Pharmacy' };
 
   /* Illustrative exam rules that supersede the state defaults, set before the demo starts. */
   D.EXAM_START = {
@@ -141,9 +147,9 @@
   ];
 
   D.PRD.summary = [
-    ['Goal', 'Convert an exam from a video visit to async review when the rules allow it. Same exam, no separate async copies.'],
+    ['Goal', 'Let an exam run as an async review instead of a video visit, by choice: the clinic picks it when sending, or the patient picks it at submit. Nothing converts on its own; the rules decide where the choice is offered. Same exam, no separate async copies.'],
     ['Why', 'A full-time provider reviewing an exam async costs less than a 1099 provider on video.'],
-    ['How', 'Compliance rules come first: a default for each state, a first-visit rule per state, and exam rules. Within them, the clinic picks async or video on each invite, and the patient can choose the other way unless the clinic turns that off. The engine leans toward async.'],
+    ['How', 'Compliance rules come first: a default for each state, a first-visit rule per state, and exam rules. Within them, the clinic picks async or video on each invite, and the patient can choose the other way unless the clinic turns that off. Nothing converts on its own: where async is allowed, it is offered first.'],
     ['First release', 'Clinic-portal invites, rolled out to 3 pilot clinics. API modes are designed now and built later.'],
     ['Later', 'API invites with modes, Quidget and Connect Instantly, and retiring today\'s async copies.'],
     ['Build', 'To be confirmed by Engineering (questions 8 and 10).'],
@@ -160,6 +166,7 @@
     ['API', 'Modes: force_sync, force_async and patient_choice, still bounded by the rules. Designed now, built with API invites.'],
     ['Same exam', 'A converted exam is not a copy. Providers work it like any async exam today.'],
     ['Rollout', 'Pilot clinics are switched on with an internal rollout flag (question 6), not a clinic setting.'],
+    ['Time to 1099', 'A converted exam waits for full-time providers for the Qualiphy standard time (Async Access Settings) before 1099 providers see it. An exam can set its own time, which overrides the standard.'],
   ];
 
   D.PRD.whoSees = [
@@ -176,7 +183,7 @@
       why: 'A converted exam only saves money when a full-time provider does it, and async volume is growing. Async Access Settings already control when 1099 providers see async exams.',
       def: 'Yes',
       opts: [{ v: 'yes', label: 'Yes' }, { v: 'no', label: 'No' }],
-      effect: { yes: '1099 providers see a converted exam only after the hold in Async Access Settings.', no: 'Converted exams show to every provider at once.' } },
+      effect: { yes: '1099 providers see a converted exam only after its time to 1099: the Qualiphy standard, or the exam\'s own.', no: 'Converted exams show to every provider at once.' } },
     { n: 2, who: 'Leadership', key: 'q3', short: 'states start off or on',
       q: 'At go-live, do states start off (Compliance turns on the ones it has reviewed) or on (Compliance turns off the ones that don\'t allow async)?',
       why: 'Each state gets a default: some allow async conversion, some do not. Starting off means an unreviewed state never goes async by mistake.',
@@ -252,9 +259,9 @@
   D.PRD.numberNotes = [];
 
   D.PRD.requirements = [
-    { n: 1, title: 'One exam, either way', text: 'An exam runs as async review or a video visit with no separate async copy.', passes: 'The same exam runs async when the rules and the clinic allow it, and as video otherwise.', step: 'invite-async' },
+    { n: 1, title: 'One exam, either way', text: 'An exam runs as async review or a video visit with no separate async copy.', passes: 'The same exam runs async only when the clinic picks async at send or the patient picks it at submit, and the rules allow it. Otherwise it is a video visit.', step: 'invite-async' },
     { n: 2, title: 'States and first visits', text: 'The Async admin sets each state (50 plus DC) to Async allowed, Video only or Conditional, with a note, plus a "first visit must be video" rule.', passes: 'A new patient in a state with the first-visit rule gets a video visit, and the reason names the rule.', step: 'first-visit' },
-    { n: 3, title: 'Exam rules', text: 'Each exam can or can\'t run async, with exceptions by state.', passes: 'An exam blocked in a state is video there, even when the state allows async.', step: 'exams' },
+    { n: 3, title: 'Exam rules', text: 'Each exam can or can\'t run async, with exceptions by state, and can override the Qualiphy standard time to 1099.', passes: 'An exam blocked in a state is video there, even when the state allows async. An exam with its own time to 1099 uses it instead of the standard.', step: 'exams' },
     { n: 4, title: 'Clinic control', text: 'Clinic Settings hold a default visit type and whether patients can choose. Each invite offers Async review or Video visit when the rules allow it.', passes: 'The clinic can pick video on any invite, but can\'t pick async where the rules say video.', step: 'clinic-settings' },
     { n: 5, title: 'Patient choice', text: 'When the clinic allows it, the patient can switch to the other visit type. Async is the primary button.', passes: 'A video invite can be submitted for review instead, an async exam can switch to video, and the choice is recorded.', step: 'patient-choice' },
     { n: 6, title: 'Control and log', text: 'Only the Async admin role changes the rules, and every change records who, when, and the old and new value.', passes: 'Each change shows in the log.', step: 'log' },

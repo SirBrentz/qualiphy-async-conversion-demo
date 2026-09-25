@@ -632,3 +632,19 @@ body.static *, body.static *::before, body.static *::after { animation: none !im
   .welcome { padding: 24px 20px; }
   .welcome h1 { font-size: 34px; }
 }
+
+/* ---------------------------------------------------------------- exam list: search, type and list filters; time to 1099 */
+.exam-filters { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin: 4px 0 14px; }
+.exam-filters .field { min-width: 180px; }
+.exam-filters .field.grow { flex: 1 1 260px; max-width: 380px; }
+.exam-filters .ef-count { margin-left: auto; padding-bottom: 12px; }
+.hold-cell { white-space: nowrap; }
+.hold-cell .link { margin-left: 8px; }
+.hold-own { font-weight: 600; color: var(--indigo); }
+.hold-row { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin: 14px 0 6px; background: var(--ground-2); }
+.hold-row small { display: block; color: var(--ink-60); font-size: 13px; margin-top: 2px; max-width: 520px; }
+.hold-row select { border: 1px solid var(--line-2); border-radius: 8px; padding: 9px 12px; background: #fff; min-width: 240px; }
+.ex-h { margin: 16px 0 4px; font-size: 14px; font-weight: 600; }
+.hold-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.hold-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.hold-list li:last-child { border-bottom: 0; }
